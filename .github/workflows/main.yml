@@ -1,32 +1,24 @@
-name: AI Full Code Review
+name: Revisão Automática com Gemini CLI
 
 on:
   pull_request:
-    branches: [ "main" ]
-
-permissions:
-  contents: read
-  pull-requests: write
-  issues: write
+    branches:
+      - main
 
 jobs:
   review:
     runs-on: ubuntu-latest
-    steps:
-      # 1️⃣ Checkout completo do repositório
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0  # necessário para calcular diffs corretamente
 
-      # 2️⃣ Instala dependências
-      - name: Install dependencies
+    steps:
+      - name: Checkout do código
+        uses: actions/checkout@v4
+
+      - name: Instalar dependências
         run: |
           sudo apt-get update
           sudo apt-get install -y jq curl
 
-      # 3️⃣ Captura o diff do PR (adições, deleções e alterações)
-      - name: Get diff of all changes
+      - name: Obter o diff do PR
         id: diff
         run: |
           BASE_SHA=${{ github.event.pull_request.base.sha }}
@@ -34,29 +26,23 @@ jobs:
           git diff $BASE_SHA...HEAD --unified=0 > full_diff.diff
           echo "diff_file=full_diff.diff" >> $GITHUB_OUTPUT
 
-      # 4️⃣ Envia o diff para a OpenAI e salva a resposta
-      - name: AI Review with OpenAI
+      - name: Revisão com Gemini CLI
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
-          echo "## 🤖 Revisão Completa de Código com IA" > review.md
+          echo "## Revisão Automática do PR" > review.md
 
           if [ ! -f "${{ steps.diff.outputs.diff_file }}" ]; then
-            echo "Nenhum diff encontrado" >> review.md
+            echo "Nenhuma alteração detectada." >> review.md
           else
-            # Limita o diff a 1000 linhas
-            diff_content=$(head -n 1000 "${{ steps.diff.outputs.diff_file }}" || echo "Diff muito grande")
-            diff_content=${diff_content:-"Nenhuma alteração detectada"}
-
-            # Escapa corretamente para JSON
+            diff_content=$(head -n 500 "${{ steps.diff.outputs.diff_file }}" || echo "Diff muito grande")
             escaped_diff=$(printf '%s' "$diff_content" | jq -Rs .)
 
-            # Chamada à OpenAI
             raw_response=$(curl -sS -X POST https://api.openai.com/v1/chat/completions \
-              -H "Authorization: Bearer $OPENAI_API_KEY" \
+              -H "Authorization: Bearer $GEMINI_API_KEY" \
               -H "Content-Type: application/json" \
               -d "{
-                \"model\": \"gpt-4o-mini\", 
+                \"model\": \"gpt-4o-mini\",
                 \"messages\": [
                   {\"role\": \"system\", \"content\": \"Você é um revisor de código experiente em Java Spring Boot.\"},
                   {\"role\": \"user\", \"content\": $escaped_diff}
@@ -64,11 +50,6 @@ jobs:
                 \"temperature\": 0.2
               }")
 
-            # Debug: mostra a resposta completa
-            echo "Raw OpenAI response:"
-            echo "$raw_response"
-
-            # Extrai o texto da IA, garantindo fallback
             response=$(echo "$raw_response" | jq -r '.choices[0].message.content // "A IA não retornou nenhum conteúdo."')
 
             echo "$response" >> review.md
@@ -76,15 +57,13 @@ jobs:
             echo "$response"
           fi
 
-      # 5️⃣ Salva o review como artefato
-      - name: Upload review artifact
+      - name: Upload do artefato de revisão
         uses: actions/upload-artifact@v4
         with:
           name: ai-review
           path: review.md
 
-      # 6️⃣ Comenta o review no Pull Request
-      - name: Comment on PR
+      - name: Comentar no PR
         uses: marocchino/sticky-pull-request-comment@v2
         with:
           path: review.md
