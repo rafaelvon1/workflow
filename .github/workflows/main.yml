@@ -5,39 +5,58 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
 jobs:
   review:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout do código
+      # 1️⃣ Checkout completo do repositório
+      - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.ref }}
 
-      - name: Instalar dependências
+      # 2️⃣ Instala dependências
+      - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y jq curl
 
-      - name: Obter o diff do PR
+      # 3️⃣ Obter diff do PR usando merge-base
+      - name: Get diff of PR
         id: diff
         run: |
+          git fetch origin main
           BASE_SHA=${{ github.event.pull_request.base.sha }}
-          echo "Base commit: $BASE_SHA"
-          git diff $BASE_SHA...HEAD --unified=0 > full_diff.diff
+          HEAD_SHA=${{ github.event.pull_request.head.sha }}
+          MERGE_BASE=$(git merge-base $BASE_SHA $HEAD_SHA)
+          echo "Merge base: $MERGE_BASE"
+          git diff $MERGE_BASE $HEAD_SHA -- '*.java' '*.yml' '*.properties' --unified=0 > full_diff.diff
           echo "diff_file=full_diff.diff" >> $GITHUB_OUTPUT
 
-      - name: Revisão com Gemini CLI
+      # 4️⃣ Revisão com Gemini CLI
+      - name: AI Review with Gemini CLI
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
-          echo "## Revisão Automática do PR" > review.md
+          echo "## 🤖 Revisão Automática de Código com IA" > review.md
 
           if [ ! -f "${{ steps.diff.outputs.diff_file }}" ]; then
             echo "Nenhuma alteração detectada." >> review.md
           else
+            # Limita diff a 500 linhas para evitar request muito grande
             diff_content=$(head -n 500 "${{ steps.diff.outputs.diff_file }}" || echo "Diff muito grande")
+            diff_content=${diff_content:-"Nenhuma alteração detectada"}
+
+            # Escapa para JSON
             escaped_diff=$(printf '%s' "$diff_content" | jq -Rs .)
 
+            # Chamada à API do Gemini CLI / OpenAI
             raw_response=$(curl -sS -X POST https://api.openai.com/v1/chat/completions \
               -H "Authorization: Bearer $GEMINI_API_KEY" \
               -H "Content-Type: application/json" \
@@ -50,6 +69,7 @@ jobs:
                 \"temperature\": 0.2
               }")
 
+            # Extrai resposta da IA com fallback
             response=$(echo "$raw_response" | jq -r '.choices[0].message.content // "A IA não retornou nenhum conteúdo."')
 
             echo "$response" >> review.md
@@ -57,13 +77,15 @@ jobs:
             echo "$response"
           fi
 
-      - name: Upload do artefato de revisão
+      # 5️⃣ Upload do review como artefato
+      - name: Upload review artifact
         uses: actions/upload-artifact@v4
         with:
           name: ai-review
           path: review.md
 
-      - name: Comentar no PR
+      # 6️⃣ Comentar no PR
+      - name: Comment on PR
         uses: marocchino/sticky-pull-request-comment@v2
         with:
           path: review.md
